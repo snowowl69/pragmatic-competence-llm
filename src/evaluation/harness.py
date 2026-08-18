@@ -47,6 +47,20 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
+# Windows console encoding guard
+# ---------------------------------------------------------------------------
+# On Windows the default console encoding is cp1252, which cannot render many
+# Unicode characters used in print statements. Reconfigure stdout/stderr to
+# UTF-8 with a safe replacement for any codepoints that still can't be shown.
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+except Exception:
+    pass  # Not critical — best-effort only
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
@@ -79,31 +93,33 @@ def extract_label(raw_output: str, valid_labels: list[str]) -> str:
 
     Strategy:
       1. Check if the output (stripped, lowered) exactly matches a label.
-      2. Check if any label appears as a standalone word in the output.
-      3. Fall back to the first label found anywhere in the output.
+      2. Check if the first word matches a label.
+      3. Find all labels present as full word-boundary matches; prefer the
+         longest match to avoid substring collision (e.g. "no" inside "noted").
       4. If nothing matches, return "UNPARSEABLE".
+
+    Note: The previous step-4 bare substring match has been removed because it
+    caused false positives, e.g. "no" matching inside "known" or "noted".
     """
     text = raw_output.strip().lower()
 
-    # Direct match
+    # Step 1: direct exact match
     if text in valid_labels:
         return text
 
-    # First word match
+    # Step 2: first word match (handles "Yes, ..." style outputs)
     first_word = text.split()[0] if text.split() else ""
     first_word = re.sub(r"[^a-z]", "", first_word)
     if first_word in valid_labels:
         return first_word
 
-    # Search for label as a word boundary match
-    for label in valid_labels:
-        if re.search(rf"\b{re.escape(label)}\b", text):
-            return label
-
-    # Substring match (last resort)
-    for label in valid_labels:
-        if label in text:
-            return label
+    # Step 3: word-boundary search — prefer longest match to avoid collisions
+    found = [
+        label for label in valid_labels
+        if re.search(rf"\b{re.escape(label)}\b", text)
+    ]
+    if found:
+        return max(found, key=len)  # longest label wins (e.g. "sarcastic" > "is")
 
     return "UNPARSEABLE"
 
@@ -111,6 +127,73 @@ def extract_label(raw_output: str, valid_labels: list[str]) -> str:
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
+
+def score_hf_labels(
+    model: Any,
+    tokenizer: Any,
+    prompt: str,
+    valid_labels: list[str],
+) -> str:
+    """Pick the best label using token log-probabilities (single forward pass).
+
+    Instead of generating text and parsing it with regex, this function feeds
+    the prompt to the model and checks which label token (or sequence) has the
+    highest probability at the next-token position. This is more reliable than
+    generation-based label extraction, especially for short, constrained labels.
+
+    Args:
+        model: A loaded HF causal language model (in eval mode).
+        tokenizer: Matching tokenizer.
+        prompt: The formatted prompt string (without any response text).
+        valid_labels: Candidate label strings to compare.
+
+    Returns:
+        The label with the highest log-probability score.
+    """
+    import torch
+
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+    input_ids = inputs["input_ids"].to(model.device)
+
+    best_label = valid_labels[0]
+    best_score = float("-inf")
+
+    with torch.no_grad():
+        # Get logits for the last token position (= first response token)
+        outputs = model(input_ids)
+        logits = outputs.logits[0, -1, :]  # shape: [vocab_size]
+        log_probs = torch.log_softmax(logits, dim=-1)
+
+        for label in valid_labels:
+            # Tokenise the label (strip leading space artifact from tokenizer)
+            label_ids = tokenizer.encode(
+                " " + label,  # leading space matches how generation starts
+                add_special_tokens=False,
+            )
+            if not label_ids:
+                continue
+
+            if len(label_ids) == 1:
+                # Single-token label: use its log-prob directly
+                score = log_probs[label_ids[0]].item()
+            else:
+                # Multi-token label: sum log-probs of each token conditioned
+                # on the previous tokens (teacher-forced).
+                score = 0.0
+                current_input = input_ids
+                for tok_id in label_ids:
+                    out = model(current_input)
+                    lp = torch.log_softmax(out.logits[0, -1, :], dim=-1)
+                    score += lp[tok_id].item()
+                    new_tok = torch.tensor([[tok_id]], device=model.device)
+                    current_input = torch.cat([current_input, new_tok], dim=1)
+
+            if score > best_score:
+                best_score = score
+                best_label = label
+
+    return best_label
 
 
 def load_hf_model(
@@ -267,6 +350,7 @@ def run_evaluation(
     output_dir: str | Path = "results/",
     quantize_4bit: bool = True,
     run_index: int = 0,
+    logit_score: bool = False,
 ) -> list[dict[str, Any]]:
     """Run the evaluation harness on a test set.
 
@@ -282,6 +366,8 @@ def run_evaluation(
         output_dir: Directory to save results
         quantize_4bit: Whether to load local model in 4-bit
         run_index: Run index for repeated evaluations
+        logit_score: If True, use token log-probability scoring instead of
+            regex parsing for local models. More accurate but ~2x slower.
 
     Returns:
         List of result dictionaries
@@ -336,11 +422,14 @@ def run_evaluation(
         # Generate prediction
         if use_api:
             raw_output = generate_api(prompt, api_model_name)
+            predicted_label = extract_label(raw_output, valid_labels)
+        elif logit_score:
+            # Logit-based scoring: no generation, single forward pass per item
+            raw_output = "[logit-scored]"
+            predicted_label = score_hf_labels(model, tokenizer, prompt, valid_labels)
         else:
             raw_output = generate_hf(model, tokenizer, prompt)
-
-        # Extract label
-        predicted_label = extract_label(raw_output, valid_labels)
+            predicted_label = extract_label(raw_output, valid_labels)
         gold_label = item["label"]
         is_correct = predicted_label == gold_label
         if is_correct:
@@ -420,6 +509,9 @@ def main() -> None:
                         help="Disable 4-bit quantization for local models")
     parser.add_argument("--runs", type=int, default=1,
                         help="Number of evaluation runs (for stability measurement)")
+    parser.add_argument("--logit-score", action="store_true",
+                        help="Use token log-probability scoring instead of regex parsing "
+                             "(more accurate, ~2x slower, local models only)")
 
     args = parser.parse_args()
 
@@ -436,6 +528,7 @@ def main() -> None:
             output_dir=args.output_dir,
             quantize_4bit=not args.no_quantize,
             run_index=run_idx,
+            logit_score=args.logit_score,
         )
 
 

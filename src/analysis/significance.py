@@ -18,10 +18,28 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from sklearn.metrics import cohen_kappa_score
+except ImportError:  # graceful fallback if sklearn not installed
+    cohen_kappa_score = None  # type: ignore[assignment]
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.metrics import load_results, mcnemars_test
+
+
+def _compute_kappa(gold: list[str], pred: list[str]) -> float | None:
+    """Compute Cohen's kappa between gold labels and predictions.
+
+    Returns None if sklearn is not available or computation fails.
+    """
+    if cohen_kappa_score is None:
+        return None
+    try:
+        return float(cohen_kappa_score(gold, pred))
+    except Exception:
+        return None
 
 
 def run_significance_tests(
@@ -66,6 +84,8 @@ def run_significance_tests(
 
     results["overall"] = mcnemars_test(gold_all, pred_a_all, pred_b_all)
     results["overall"]["n_items"] = len(common_ids)
+    results["overall"]["kappa_baseline"] = _compute_kappa(gold_all, pred_a_all)
+    results["overall"]["kappa_finetuned"] = _compute_kappa(gold_all, pred_b_all)
 
     # Per-category tests
     for cat in categories:
@@ -84,6 +104,8 @@ def run_significance_tests(
 
         results[cat] = mcnemars_test(gold, pred_a, pred_b)
         results[cat]["n_items"] = len(cat_ids)
+        results[cat]["kappa_baseline"] = _compute_kappa(gold, pred_a)
+        results[cat]["kappa_finetuned"] = _compute_kappa(gold, pred_b)
 
     return results
 
@@ -102,12 +124,16 @@ def _load_all_results(directory: Path) -> list[dict[str, Any]]:
 
 
 def print_significance_report(results: dict[str, Any]) -> None:
-    """Print a formatted significance test report."""
-    print(f"\n{'=' * 80}")
-    print("McNEMAR'S TEST — BASELINE vs. FINE-TUNED")
-    print(f"{'=' * 80}")
-    print(f"{'Category':<25} {'p-value':>10} {'Sig.(0.05)':>12} {'Sig.(0.01)':>12} {'Δ Accuracy':>12} {'Method':>20}")
-    print("-" * 90)
+    """Print a formatted significance test report including Cohen's kappa."""
+    print(f"\n{'=' * 100}")
+    print("McNEMAR'S TEST + COHEN'S KAPPA -- BASELINE vs. FINE-TUNED")
+    print(f"{'=' * 100}")
+    header = (
+        f"{'Category':<25} {'p-value':>10} {'Sig.(0.05)':>12} {'Sig.(0.01)':>12}"
+        f" {'Delta Acc':>10} {'kappa_A':>9} {'kappa_B':>9}"
+    )
+    print(header)
+    print("-" * 100)
 
     for cat, data in results.items():
         if "error" in data:
@@ -115,16 +141,23 @@ def print_significance_report(results: dict[str, Any]) -> None:
             continue
 
         p = data["p_value"]
-        sig05 = "✓ YES" if data["significant_at_005"] else "✗ no"
-        sig01 = "✓ YES" if data["significant_at_001"] else "✗ no"
+        sig05 = "YES" if data["significant_at_005"] else "no"
+        sig01 = "YES" if data["significant_at_001"] else "no"
         delta = data["model_b_accuracy"] - data["model_a_accuracy"]
-        method = data["method"]
+        kappa_a = data.get("kappa_baseline")
+        kappa_b = data.get("kappa_finetuned")
+        kappa_a_str = f"{kappa_a:+.3f}" if kappa_a is not None else "  N/A "
+        kappa_b_str = f"{kappa_b:+.3f}" if kappa_b is not None else "  N/A "
 
-        print(f"{cat:<25} {p:>10.4f} {sig05:>12} {sig01:>12} {delta:>+11.3f} {method:>20}")
+        print(
+            f"{cat:<25} {p:>10.4f} {sig05:>12} {sig01:>12}"
+            f" {delta:>+10.3f} {kappa_a_str:>9} {kappa_b_str:>9}"
+        )
 
-    print(f"{'=' * 80}")
+    print(f"{'=' * 100}")
     print("Model A = baseline, Model B = fine-tuned")
-    print("Positive Δ Accuracy = fine-tuned is better\n")
+    print("Positive Delta Acc = fine-tuned is better")
+    print("kappa_A / kappa_B = Cohen's kappa vs. gold labels (0=chance, 1=perfect)\n")
 
 
 # ---------------------------------------------------------------------------

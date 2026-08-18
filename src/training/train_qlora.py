@@ -60,7 +60,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "lora_rank": 16,
     "lora_alpha": 32,
     "lora_dropout": 0.05,
-    "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
+    # Include MLP projections alongside attention projections for better coverage
+    # of representational capacity (matches published Llama-3 QLoRA recipes).
+    "target_modules": [
+        "q_proj", "k_proj", "v_proj", "o_proj",  # attention
+        "gate_proj", "up_proj", "down_proj",      # MLP
+    ],
 
     # Quantization
     "load_in_4bit": True,
@@ -117,6 +122,18 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _auto_dtype():
+    """Return torch.bfloat16 if the hardware supports it, else torch.float16.
+
+    Hard-coding bfloat16 causes silent NaN training on Ampere/Pascal cards that
+    lack native BF16 support. This helper detects capability at runtime.
+    """
+    import torch
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
 def train(config: dict[str, Any]) -> None:
     """Run QLoRA fine-tuning with the given config."""
     import torch
@@ -128,7 +145,7 @@ def train(config: dict[str, Any]) -> None:
         BitsAndBytesConfig,
         TrainingArguments,
     )
-    from trl import SFTTrainer
+    from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
 
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -150,12 +167,14 @@ def train(config: dict[str, Any]) -> None:
     tokenizer.padding_side = "right"
 
     # --- Quantization config ---
+    compute_dtype = _auto_dtype()
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=config.get("load_in_4bit", True),
         bnb_4bit_quant_type=config.get("bnb_4bit_quant_type", "nf4"),
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=config.get("bnb_4bit_use_double_quant", True),
     )
+    print(f"  Compute dtype: {compute_dtype}")
 
     # --- Load base model ---
     print(f"Loading base model: {config['base_model']}")
@@ -203,17 +222,35 @@ def train(config: dict[str, Any]) -> None:
         val_items = load_jsonl_dataset(config["val_file"])
         print(f"  Validation items: {len(val_items)}")
 
-    # Format as text for SFTTrainer
+    # Format using native chat template for Llama-3.1 (and compatible models).
+    # DataCollatorForCompletionOnlyLM will mask the instruction tokens so that
+    # the loss is computed ONLY over the assistant response tokens.
+    #
+    # The assistant turn boundary token for Llama-3.1-Instruct is:
+    #   <|start_header_id|>assistant<|end_header_id|>
+    RESPONSE_TEMPLATE = "<|start_header_id|>assistant<|end_header_id|>"
+
     def format_item(item):
-        """Format a single training item as text."""
+        """Format a single training item using the model's native chat template.
+
+        Always converts to a messages list so that apply_chat_template handles
+        control tokens correctly for instruction-tuned models like Llama-3.1.
+        """
         if "messages" in item:
-            # Chat format
-            return tokenizer.apply_chat_template(item["messages"], tokenize=False)
+            messages = item["messages"]
         else:
-            # Instruction format
             instruction = item.get("instruction", "")
             output = item.get("output", "")
-            return f"### Instruction:\n{instruction}\n\n### Response:\n{output}"
+            messages = [
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": output},
+            ]
+        # add_generation_prompt=False: we want the full turn, not an open prompt
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
 
     train_texts = [{"text": format_item(item)} for item in train_items]
     val_texts = [{"text": format_item(item)} for item in val_items] if val_items else None
@@ -224,6 +261,7 @@ def train(config: dict[str, Any]) -> None:
     val_dataset = Dataset.from_list(val_texts) if val_texts else None
 
     # --- Training arguments ---
+    use_bf16 = (compute_dtype == torch.bfloat16)
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=config.get("num_train_epochs", 3),
@@ -233,8 +271,8 @@ def train(config: dict[str, Any]) -> None:
         weight_decay=config.get("weight_decay", 0.01),
         warmup_ratio=config.get("warmup_ratio", 0.03),
         lr_scheduler_type=config.get("lr_scheduler_type", "cosine"),
-        fp16=config.get("fp16", False),
-        bf16=config.get("bf16", True),
+        fp16=config.get("fp16", not use_bf16),
+        bf16=config.get("bf16", use_bf16),
         logging_steps=config.get("logging_steps", 10),
         save_steps=config.get("save_steps", 50),
         eval_strategy=config.get("eval_strategy", "steps") if val_dataset else "no",
@@ -246,6 +284,14 @@ def train(config: dict[str, Any]) -> None:
         metric_for_best_model="eval_loss" if val_dataset else None,
     )
 
+    # DataCollator that masks all tokens BEFORE the assistant header from loss.
+    # This is the critical fix: without this, the model trains on the instruction
+    # text too, which wastes capacity and can cause instruction-following drift.
+    collator = DataCollatorForCompletionOnlyLM(
+        response_template=RESPONSE_TEMPLATE,
+        tokenizer=tokenizer,
+    )
+
     # --- Trainer ---
     trainer = SFTTrainer(
         model=model,
@@ -253,6 +299,7 @@ def train(config: dict[str, Any]) -> None:
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=training_args,
+        data_collator=collator,
         max_seq_length=config.get("max_seq_length", 512),
     )
 

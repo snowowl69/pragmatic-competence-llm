@@ -49,6 +49,28 @@ Context: {context}
 Utterance: "{utterance}"
 Answer:"""
 
+SARCASM_FEW_SHOT_V2 = """Below are some labelled examples, then a new case for you to judge. For each utterance, write only "sincere" or "sarcastic" — no other words.
+
+[Example A]
+Situation: A marathon runner finishes the race in record time.
+They said: "That was an easy stroll."
+Label: sarcastic
+
+[Example B]
+Situation: A friend helps you move to a new apartment over the weekend.
+They said: "I'm happy to help anytime."
+Label: sincere
+
+[Example C]
+Situation: A presentation crashes the projector mid-way through.
+They said: "Well, that went perfectly."
+Label: sarcastic
+
+[New case]
+Situation: {context}
+They said: "{utterance}"
+Label:"""
+
 # ---------------------------------------------------------------------------
 # Implicature prompt templates
 # ---------------------------------------------------------------------------
@@ -86,6 +108,28 @@ Now evaluate:
 {context}
 B: "{utterance}"
 Answer:"""
+
+IMPLICATURE_FEW_SHOT_V2 = """Study these short dialogues where A asks a question and B gives an indirect reply. For each new dialogue, output exactly one word — "yes", "no", or "uncertain" — reflecting what B really means.
+
+[Dialogue 1]
+A: "Did the package arrive?"
+B: "I checked the tracking this morning."
+Implied answer: uncertain
+
+[Dialogue 2]
+A: "Have you eaten?"
+B: "I just got back from the cafeteria."
+Implied answer: yes
+
+[Dialogue 3]
+A: "Did you finish the report?"
+B: "I still have two sections to go."
+Implied answer: no
+
+[New dialogue]
+{context}
+B: "{utterance}"
+Implied answer:"""
 
 # ---------------------------------------------------------------------------
 # Indirect speech act prompt templates
@@ -125,6 +169,28 @@ Context: {context}
 Utterance: "{utterance}"
 Intent:"""
 
+INDIRECT_FEW_SHOT_V2 = """Here are labelled examples of indirect speech acts. The surface form of the utterance may differ from its actual function. Respond with exactly one word: "statement", "request", "question", "suggestion", or "complaint".
+
+[Case 1]
+Setting: An employee reviewing a colleague's noisy video call.
+What they said: "People can probably hear everything through the walls."
+Function: complaint
+
+[Case 2]
+Setting: A student talking to a librarian while both look at empty shelves.
+What they said: "I wonder if the book has been re-shelved elsewhere."
+Function: question
+
+[Case 3]
+Setting: Two friends planning a road trip, looking at a map.
+What they said: "The coastal route looks really scenic this time of year."
+Function: suggestion
+
+[New case]
+Setting: {context}
+What they said: "{utterance}"
+Function:"""
+
 
 # ---------------------------------------------------------------------------
 # Template registry
@@ -135,16 +201,19 @@ PROMPT_TEMPLATES: dict[str, dict[str, str]] = {
         "zero_shot_v1": SARCASM_ZERO_SHOT_V1,
         "zero_shot_v2": SARCASM_ZERO_SHOT_V2,
         "few_shot_v1": SARCASM_FEW_SHOT_V1,
+        "few_shot_v2": SARCASM_FEW_SHOT_V2,
     },
     "implicature": {
         "zero_shot_v1": IMPLICATURE_ZERO_SHOT_V1,
         "zero_shot_v2": IMPLICATURE_ZERO_SHOT_V2,
         "few_shot_v1": IMPLICATURE_FEW_SHOT_V1,
+        "few_shot_v2": IMPLICATURE_FEW_SHOT_V2,
     },
     "indirect_speech_act": {
         "zero_shot_v1": INDIRECT_ZERO_SHOT_V1,
         "zero_shot_v2": INDIRECT_ZERO_SHOT_V2,
         "few_shot_v1": INDIRECT_FEW_SHOT_V1,
+        "few_shot_v2": INDIRECT_FEW_SHOT_V2,
     },
 }
 
