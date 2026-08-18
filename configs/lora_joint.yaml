@@ -1,0 +1,48 @@
+# QLoRA Fine-Tuning Config — Joint (All Categories)
+# This is the MUST DO training run.
+# See Section 13 of the execution guide for hyperparameter rationale.
+
+# Model
+base_model: "meta-llama/Llama-3.1-8B-Instruct"
+trust_remote_code: true
+
+# Data
+train_file: "data/training/train_instructions_joint.jsonl"
+val_file: "data/training/val_instructions_joint.jsonl"
+max_seq_length: 512
+
+# LoRA hyperparameters
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+
+# Quantization
+load_in_4bit: true
+bnb_4bit_quant_type: "nf4"
+bnb_4bit_use_double_quant: true
+
+# Training
+num_train_epochs: 3
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4  # Effective batch size = 8
+learning_rate: 1.5e-4
+weight_decay: 0.01
+warmup_ratio: 0.03
+lr_scheduler_type: "cosine"
+fp16: false
+bf16: true
+logging_steps: 10
+save_steps: 50
+eval_steps: 50
+eval_strategy: "steps"
+save_total_limit: 3
+seed: 42
+
+# Output
+output_dir: "experiments/joint"
+experiment_name: "joint_all_categories"

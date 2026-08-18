@@ -1,0 +1,2 @@
+# Experiment results — one subfolder per training/ablation run.
+# Each subfolder should contain: training_config.yaml, adapter/, training_metrics.json

@@ -1,0 +1,2 @@
+# This directory stores exploratory Jupyter notebooks.
+# Nothing load-bearing should live only here — all production code goes in src/.

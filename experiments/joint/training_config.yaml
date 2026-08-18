@@ -1,0 +1,33 @@
+base_model: meta-llama/Llama-3.1-8B-Instruct
+bf16: true
+bnb_4bit_quant_type: nf4
+bnb_4bit_use_double_quant: true
+eval_steps: 50
+eval_strategy: steps
+experiment_name: joint_all_categories
+fp16: false
+gradient_accumulation_steps: 4
+learning_rate: 0.00015
+load_in_4bit: true
+logging_steps: 10
+lora_alpha: 32
+lora_dropout: 0.05
+lora_rank: 16
+lr_scheduler_type: cosine
+max_seq_length: 512
+num_train_epochs: 3
+output_dir: C:\Users\Raghav\Desktop\project 1\experiments\joint
+per_device_train_batch_size: 2
+save_steps: 50
+save_total_limit: 3
+seed: 42
+target_modules:
+- q_proj
+- k_proj
+- v_proj
+- o_proj
+train_file: C:\Users\Raghav\Desktop\project 1\data\training\train_instructions_joint.jsonl
+trust_remote_code: true
+val_file: C:\Users\Raghav\Desktop\project 1\data\training\val_instructions_joint.jsonl
+warmup_ratio: 0.03
+weight_decay: 0.01
