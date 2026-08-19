@@ -104,4 +104,6 @@ python app/demo.py
 
 ## License
 
-This project is for academic/research purposes. Individual datasets retain their original licenses (see `data/raw/LICENSES.md`).
+**Copyright © 2026. All Rights Reserved.**
+
+This repository and its contents are proprietary. Unauthorized copying, distribution, modification, or commercial use of any code or materials within this project is strictly prohibited without prior written permission (see [`LICENSE`](LICENSE)). Individual datasets retain their original licenses (see [`data/raw/LICENSES.md`](data/raw/LICENSES.md)).
