@@ -24,7 +24,3 @@ experiments/**/runs/
 .idea/
 .DS_Store
 Thumbs.db
-
-# Local Reports
-report.html
-*.html
