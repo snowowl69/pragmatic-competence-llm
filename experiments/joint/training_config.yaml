@@ -16,7 +16,7 @@ lora_rank: 16
 lr_scheduler_type: cosine
 max_seq_length: 512
 num_train_epochs: 3
-output_dir: C:\Users\Raghav\Desktop\project 1\experiments\joint
+output_dir: c:\Users\Devangi\OneDrive\Desktop\pragmatic-competence-llm\pragmatic-competence-llm\experiments\joint
 per_device_train_batch_size: 2
 save_steps: 50
 save_total_limit: 3
@@ -28,6 +28,6 @@ target_modules:
 - o_proj
 train_file: C:\Users\Raghav\Desktop\project 1\data\training\train_instructions_joint.jsonl
 trust_remote_code: true
-val_file: C:\Users\Raghav\Desktop\project 1\data\training\val_instructions_joint.jsonl
+val_file: c:\Users\Devangi\OneDrive\Desktop\pragmatic-competence-llm\pragmatic-competence-llm\data\training\val_instructions_joint.jsonl
 warmup_ratio: 0.03
 weight_decay: 0.01
