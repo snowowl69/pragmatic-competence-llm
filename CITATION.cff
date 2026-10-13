@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, cite the repository and the exact commit used, and separately cite the source datasets and base model."
+title: "Evaluating and Enhancing Pragmatic Competence in Large Language Models"
+type: software
+authors:
+  - name: "Pragmatic Competence in LLMs contributors"
+repository-code: "https://github.com/snowowl69/pragmatic-competence-llm"
+url: "https://github.com/snowowl69/pragmatic-competence-llm"
+abstract: "Research software and a unified benchmark for sarcasm, conversational implicature and indirect speech acts. Measured CPU reference results are available; full Llama adaptation and independent human interpretation evaluation remain unfinished."
+keywords:
+  - pragmatics
+  - sarcasm
+  - implicature
+  - indirect speech acts
+  - language model evaluation

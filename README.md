@@ -2,6 +2,17 @@
 
 A research pipeline and Gradio application for sarcasm, conversational implicature, and indirect speech acts.
 
+## Documentation
+
+Start with the [documentation index](docs/README.md). It links all project and repository guides.
+
+- [Installation](docs/installation.md) and [user guide](docs/user-guide.md)
+- [Architecture and diagrams](docs/architecture.md)
+- [Experiment protocol](docs/experiment-protocol.md) and [reproducibility](docs/reproducibility.md)
+- [Model card](docs/model-card.md), [dataset card](docs/dataset_card.md) and [measured results](docs/results.md)
+- [Completion status](docs/completion-status.md) and [troubleshooting](docs/troubleshooting.md)
+- [Contributing](CONTRIBUTING.md), [security](SECURITY.md), [code of conduct](CODE_OF_CONDUCT.md), [citation](CITATION.cff) and [changelog](CHANGELOG.md)
+
 ## Run locally (real CPU reference)
 
 ```powershell
@@ -45,6 +56,6 @@ The original v1 benchmark/training data remains for provenance and must not be u
 Repository code retains its original proprietary LICENSE. Dataset licenses are independent. Existing license placeholders are not verified rights; see the dataset card and source repositories.
 ## Live research dashboard
 
-The Gradio demo includes automatically refreshed test graphs, confusion matrices, dataset counts, training loss, a transfer matrix, and an evidence checklist. See [live monitoring](docs/live-monitoring.md) for the data sources and how to display GPU training logs. These plots do not imply that unfinished LLM experiments have been completed.
+The Gradio demo includes automatically refreshed test graphs, confusion matrices, dataset counts, training loss and a transfer matrix. The written completion checklist is linked below. See [live monitoring](docs/live-monitoring.md) for the data sources and how to display GPU training logs. These plots do not imply that unfinished LLM experiments have been completed.
 
 Use **View graphs and result matrices** to open `/graphs`; `/review` contains the blinded human-rating workflow. [Completion status](docs/completion-status.md) maps every project requirement to current evidence and the remaining work. The full GPU experiments and independent human ratings have not been completed.
