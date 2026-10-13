@@ -1,68 +1,17 @@
-# Dataset Card — Pragmatic Competence Benchmark
+# Pragmatic Competence Benchmark v2
 
-> **Status:** Skeleton — to be completed after Phase 4 (Benchmark Freeze).
+Built from the committed raw files with seed 42. Manifest: `data/benchmark/v2/manifest.json`.
 
----
+| Category | Train | Validation | Test |
+|---|---:|---:|---:|
+| sarcasm | 517 | 68 | 104 |
+| implicature | 2000 | 3251 | 4726 |
+| indirect_speech_act | 108 | 15 | 22 |
 
-## Dataset Summary
+Circa questions and MUStARD dialogue contexts are grouped before splitting. Exact normalized replies shared across splits are excluded, and training is capped at 2,000 examples per category. These are within-source grouped splits, not source-dataset-disjoint splits. Training and validation instruction files are derived from v2 only. The original v1 files remain solely for provenance and must not be used for new experiments.
 
-A unified benchmark for evaluating LLM pragmatic competence across three phenomena: sarcasm/irony, conversational implicature, and indirect speech acts. Combines existing public datasets with hand-curated examples in a single schema.
+The committed iSarcasm CSVs contain tweet IDs without text, so they are excluded. Circa is parsed as literal eight-column TSV with quoting disabled. Conditional yes is mapped to uncertain because it is not an unconditional yes; uncertain also includes NA and ambiguity. This mapping sacrifices nuance and must be reported in all comparisons.
 
-## Supported Tasks
+MUStARD meanings are generic label-derived explanations, not human-authored meaning gold standards. Circa meanings similarly restate the classification target. Do not use these as evidence of explanation quality. Indirect speech-act examples are author-provided and small; no new independent human annotation has been performed. Exact leakage checks pass; near-duplicate and template-family leakage, pretraining contamination, and cultural bias remain limitations. Automated splits do not establish human validity.
 
-- **Pragmatic category classification** (sarcasm: sincere/sarcastic; implicature: yes/no/uncertain; indirect speech acts: statement/request/question/suggestion/complaint)
-- **Intended meaning generation** (secondary, qualitative task)
-
-## Languages
-
-English only.
-
-## Dataset Structure
-
-### Schema
-See `docs/annotation_guidelines.md` and `src/preprocessing/schema.py` for the full JSON schema.
-
-### Splits
-
-| Split | Purpose | Size | Notes |
-|---|---|---|---|
-| `train` | Fine-tuning | TBD | Drawn from combined sources |
-| `val` | Hyperparameter tuning, early stopping | TBD | Disjoint at source-dataset level |
-| `test` | Final evaluation (never used for training decisions) | TBD | Includes hand-verified, contamination-checked subset |
-
-### Per-Category Distribution
-
-| Category | Train | Val | Test | Total |
-|---|---|---|---|---|
-| Sarcasm | TBD | TBD | TBD | TBD |
-| Implicature | TBD | TBD | TBD | TBD |
-| Indirect Speech Acts | TBD | TBD | TBD | TBD |
-| **Total** | TBD | TBD | TBD | TBD |
-
-## Source Datasets
-
-| Source | Phenomena | License | Notes |
-|---|---|---|---|
-| MUStARD | Sarcasm | TBD (verify) | Dialogue context available |
-| iSarcasm | Sarcasm | TBD (verify) | Tweet-based |
-| Circa | Implicature | TBD (verify) | Indirect answers to polar questions |
-| Hand-curated | Indirect speech acts | CC-BY (our own) | Template-derived + manually written |
-| Control items | All categories | CC-BY (our own) | Sincere/literal controls for shortcut detection |
-
-## Annotation Process
-
-- Guidelines: `docs/annotation_guidelines.md`
-- Double-annotated sample: 10–15% of total
-- Inter-annotator agreement: Cohen's κ = TBD (target ≥ 0.6)
-- Ambiguous items flagged and excluded from strict accuracy scoring
-
-## Known Limitations
-
-- English-only, predominantly Western cultural context
-- Small scale (~600–1,300 items) — not representative of full pragmatic diversity
-- Indirect speech act category has the least established source data
-- Public-dataset test items may have contamination risk from model pretraining — headline claims weighted toward hand-curated test subset
-
-## Citation
-
-TBD — to be added upon project completion.
+Source references: [MUStARD](https://github.com/soujanyaporia/MUStARD), [Circa](https://github.com/google-research-datasets/circa), [iSarcasm](https://github.com/silviu-oprea/iSarcasm). The Circa README describes Attribution 4.0 but links to BY-SA 4.0; resolve this discrepancy with the authors before redistribution beyond the existing repository. Source license placeholders are not verified grants.

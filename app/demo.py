@@ -16,12 +16,15 @@ See Section 17–18 of the execution guide for demo design and faculty script.
 import argparse
 import json
 import sys
+import secrets
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import gradio as gr
+
+HISTORY_SECRET = secrets.token_hex(16)
 
 # ---------------------------------------------------------------------------
 # Preset examples (Section 17: include at least one failure case)
@@ -87,6 +90,7 @@ PRESET_EXAMPLES = [
 _baseline_model = None
 _finetuned_model = None
 _tokenizer = None
+_local_models = None
 
 
 def load_models(model_name: str, adapter_path: str | None = None) -> None:
@@ -108,13 +112,17 @@ def load_models(model_name: str, adapter_path: str | None = None) -> None:
 
     except Exception as e:
         print(f"⚠ Could not load models: {e}")
-        print("  Running in demo mode with simulated outputs.")
-        _baseline_model = None
-        _finetuned_model = None
+        raise RuntimeError("Model loading failed. Use --no-model explicitly for the illustrative demo.") from e
 
 
 def run_inference(context: str, utterance: str, category: str) -> dict:
     """Run inference on both baseline and fine-tuned models."""
+    if _local_models is not None:
+        entry = _local_models[category]
+        prediction = str(entry["present"].predict([context + "\n" + utterance])[0])
+        return {"baseline_label": entry["majority"], "finetuned_label": prediction,
+                "baseline_raw": "Majority label learned from the training split",
+                "finetuned_raw": "Prediction from a trained TF-IDF + logistic regression classifier (not an LLM)"}
     from src.evaluation.prompts import format_prompt, get_valid_labels
     from src.evaluation.harness import generate_hf, extract_label
 
@@ -128,7 +136,7 @@ def run_inference(context: str, utterance: str, category: str) -> dict:
         baseline_label = extract_label(baseline_raw, valid_labels)
     else:
         # Check preset match or provide intelligent baseline simulation
-        matched_preset = next((ex for ex in PRESET_EXAMPLES if ex["utterance"].strip().lower() == utterance.strip().lower() and ex["category"] == category), None)
+        matched_preset = match_preset(context, utterance, category)
         if matched_preset:
             if category == "sarcasm":
                 # Baseline LLM often has literal bias on sarcastic items with positive words
@@ -154,8 +162,11 @@ def run_inference(context: str, utterance: str, category: str) -> dict:
     if _finetuned_model is not None and _tokenizer is not None:
         finetuned_raw = generate_hf(_finetuned_model, _tokenizer, prompt)
         finetuned_label = extract_label(finetuned_raw, valid_labels)
+    elif _baseline_model is not None:
+        finetuned_label = "N/A"
+        finetuned_raw = "No trained adapter loaded."
     else:
-        matched_preset = next((ex for ex in PRESET_EXAMPLES if ex["utterance"].strip().lower() == utterance.strip().lower() and ex["category"] == category), None)
+        matched_preset = match_preset(context, utterance, category)
         if matched_preset:
             finetuned_label = matched_preset["gold_label"]
             finetuned_meaning = matched_preset["gold_meaning"]
@@ -184,6 +195,12 @@ def run_inference(context: str, utterance: str, category: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def match_preset(context, utterance, category):
+    return next((ex for ex in PRESET_EXAMPLES if ex["context"].strip().casefold() == context.strip().casefold()
+                 and ex["utterance"].strip().casefold() == utterance.strip().casefold()
+                 and ex["category"] == category), None)
+
+
 def predict(context: str, utterance: str, category: str) -> str:
     """Main prediction function called by Gradio."""
     if not context or not utterance:
@@ -195,15 +212,19 @@ def predict(context: str, utterance: str, category: str) -> str:
     gold_label = ""
     gold_meaning = ""
     for ex in PRESET_EXAMPLES:
-        if ex["utterance"].strip() == utterance.strip() and ex["category"] == category:
+        if ex == match_preset(context, utterance, category):
             gold_label = ex["gold_label"]
             gold_meaning = ex["gold_meaning"]
             break
 
     # Format output as a comparison table
     output = f"## Results\n\n"
+    if _local_models is not None:
+        output += "**Live CPU reference model — majority baseline vs. trained TF-IDF classifier. This is not an LLM comparison.**\n\n"
+    elif _baseline_model is None:
+        output += "**Illustrative simulation — these outputs are scripted and are not model predictions or research evidence.**\n\n"
     output += f"**Category:** {category}\n\n"
-    output += f"| | Baseline | Fine-Tuned |\n"
+    output += "| | Majority baseline | TF-IDF classifier |\n" if _local_models is not None else "| | Baseline | Fine-Tuned |\n"
     output += f"|---|---|---|\n"
     output += f"| **Predicted Label** | {results['baseline_label']} | {results['finetuned_label']} |\n"
 
@@ -212,11 +233,13 @@ def predict(context: str, utterance: str, category: str) -> str:
         finetuned_correct = "✅" if results["finetuned_label"] == gold_label else "❌"
         output += f"| **Correct?** | {baseline_correct} | {finetuned_correct} |\n"
         output += f"\n**Gold Label:** {gold_label}\n"
-        output += f"\n**Intended Meaning:** {gold_meaning}\n"
+        output += f"\n**Reference intended meaning (preset):** {gold_meaning}\n"
 
     output += f"\n---\n\n**Raw Outputs:**\n"
-    output += f"- Baseline: *{results['baseline_raw'][:200]}*\n"
-    output += f"- Fine-Tuned: *{results['finetuned_raw'][:200]}*\n"
+    baseline_name = "Majority baseline" if _local_models is not None else "Baseline"
+    comparison_name = "TF-IDF classifier" if _local_models is not None else "Fine-Tuned"
+    output += f"- {baseline_name}: *{results['baseline_raw'][:200]}*\n"
+    output += f"- {comparison_name}: *{results['finetuned_raw'][:200]}*\n"
 
     return output
 
@@ -234,7 +257,11 @@ def build_demo() -> gr.Blocks:
     with gr.Blocks(
         title="Pragmatic Competence in LLMs — Demo",
     ) as demo:
-        gr.Markdown(
+        gr.Button('View graphs and result matrices', link='/graphs', variant='secondary')
+        gr.Button('Human interpretation review', link='/review')
+        gr.Markdown("**Mode: live CPU reference classifier (TF-IDF, not an LLM).**" if _local_models is not None else "**Mode: illustrative simulation (scripted outputs, no model loaded).**" if _baseline_model is None
+                    else "**Mode: live model inference.** " + ("Fine-tuned adapter loaded." if _finetuned_model is not None else "Fine-tuned adapter unavailable."))
+        gr.Markdown("# Pragmatic Competence: CPU reference\n\nCompare a majority baseline and a trained lexical classifier. Enter context and utterance or select an example." if _local_models is not None else
             """
             # 🧠 Pragmatic Competence in LLMs
             ### Baseline vs. Fine-Tuned Comparison
@@ -283,11 +310,41 @@ def build_demo() -> gr.Blocks:
                     outputs=[context_input, utterance_input, category_input],
                 )
 
-        submit_btn.click(
-            fn=predict,
-            inputs=[context_input, utterance_input, category_input],
-            outputs=output,
-        )
+        from app.monitor import mount, dashboard, session_plot
+        history = gr.BrowserState([], storage_key='pragmatic-label-history', secret=HISTORY_SECRET)
+
+        def analyze_live(context, utterance, category, previous):
+            rendered = predict(context, utterance, category)
+            updated = list(previous or [])
+            # Keep history local to this browser session; never save user inputs.
+            if _local_models is not None or _baseline_model is not None:
+                for line in rendered.splitlines():
+                    if line.startswith('| **Predicted Label**') and line.split('|')[3].strip() != 'N/A':
+                        updated.append({'category': category, 'label': line.split('|')[3].strip()})
+                        updated = updated[-100:]
+                        break
+            return rendered, updated
+
+        submit_btn.click(analyze_live, [context_input, utterance_input, category_input, history],
+                         [output, history])
+
+    with demo.route('Graphs and matrices', '/graphs'):
+        gr.Button('Back to Analyze', link='/')
+        gr.Markdown('# Graphs and result matrices\nAll measured research results are on this page. Missing experiments remain explicitly marked.')
+        graph_history = gr.BrowserState([], storage_key='pragmatic-label-history', secret=HISTORY_SECRET)
+        live_plot = gr.Plot(label='Live input prediction history')
+        gr.Markdown('Only category and predicted label are stored in this browser, for the last 100 analyses. History resets when the server restarts. Input text is not stored by this feature.')
+        clear = gr.Button('Clear prediction history')
+        clear.click(lambda: [], outputs=graph_history)
+        graph_history.change(session_plot, graph_history, live_plot)
+        demo.load(session_plot, graph_history, live_plot)
+        chart_category, chart_outputs = mount(gr)
+        demo.load(dashboard, chart_category, chart_outputs)
+
+    with demo.route('Human review', '/review'):
+        gr.Button('Back to Analyze', link='/')
+        from app.review import mount_review
+        mount_review(gr)
 
     return demo
 
@@ -298,6 +355,7 @@ def build_demo() -> gr.Blocks:
 
 
 def main() -> None:
+    global _local_models
     parser = argparse.ArgumentParser(description="Launch the pragmatic competence demo.")
     parser.add_argument("--model", type=str, default="meta-llama/Llama-3.1-8B-Instruct",
                         help="Base model name")
@@ -309,14 +367,21 @@ def main() -> None:
                         help="Create a public Gradio link")
     parser.add_argument("--no-model", action="store_true",
                         help="Run without loading models (UI-only demo mode)")
+    parser.add_argument("--local", action="store_true", help="Use trained CPU reference classifiers")
+    parser.add_argument("--open-browser", action="store_true", help="Open the browser after the server is ready")
 
     args = parser.parse_args()
 
-    if not args.no_model:
+    if args.local and args.no_model:
+        parser.error("Choose either --local or --no-model")
+    if args.local:
+        import joblib
+        _local_models = joblib.load(PROJECT_ROOT / "results/local/classifiers.joblib")
+    elif not args.no_model:
         load_models(args.model, args.adapter)
 
     demo = build_demo()
-    demo.launch(server_port=args.port, share=args.share)
+    demo.launch(server_port=args.port, share=args.share, inbrowser=args.open_browser)
 
 
 if __name__ == "__main__":

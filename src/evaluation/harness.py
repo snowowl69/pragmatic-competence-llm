@@ -38,6 +38,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -102,6 +103,13 @@ def extract_label(raw_output: str, valid_labels: list[str]) -> str:
     caused false positives, e.g. "no" matching inside "known" or "noted".
     """
     text = raw_output.strip().lower()
+    # Explicit answer fields take precedence over labels mentioned in reasoning.
+    answer = re.search(r"(?:label|answer|actual intent|implied answer)\s*:\s*([^\n]+)", text)
+    if answer:
+        candidate = answer.group(1).strip().strip('"\' .')
+        for label in sorted(valid_labels, key=len, reverse=True):
+            if re.match(rf"^{re.escape(label)}\b", candidate):
+                return label
 
     # Step 1: direct exact match
     if text in valid_labels:
@@ -153,7 +161,9 @@ def score_hf_labels(
     """
     import torch
 
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+    if getattr(tokenizer, "chat_template", None):
+        prompt = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048, add_special_tokens=not bool(getattr(tokenizer, "chat_template", None)))
     input_ids = inputs["input_ids"].to(model.device)
 
     best_label = valid_labels[0]
@@ -210,7 +220,7 @@ def load_hf_model(
 
     print(f"Loading model: {model_name}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -219,21 +229,21 @@ def load_hf_model(
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
             bnb_4bit_use_double_quant=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             quantization_config=bnb_config,
             device_map="auto",
-            trust_remote_code=True,
+            trust_remote_code=False,
         )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map="auto",
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float32,
+            trust_remote_code=False,
         )
 
     # Load LoRA adapter if provided
@@ -259,7 +269,9 @@ def generate_hf(
     """
     import torch
 
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+    if getattr(tokenizer, "chat_template", None):
+        prompt = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048, add_special_tokens=not bool(getattr(tokenizer, "chat_template", None)))
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
     with torch.no_grad():
@@ -299,7 +311,7 @@ def generate_api(
 
     api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
-        return "API_KEY_MISSING"
+        raise RuntimeError("OPENAI_API_KEY is required for API evaluation")
 
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -330,7 +342,7 @@ def generate_api(
                 print(f"  API error (attempt {attempt + 1}): {e}. Retrying in {wait}s...")
                 time.sleep(wait)
             else:
-                return f"API_ERROR: {e}"
+                raise RuntimeError("API generation failed; evaluation aborted rather than scoring transport errors") from e
 
 
 # ---------------------------------------------------------------------------
@@ -385,10 +397,25 @@ def run_evaluation(
             if line:
                 test_items.append(json.loads(line))
     print(f"  Loaded {len(test_items)} items")
+    if not test_items:
+        raise ValueError("Evaluation requires a nonempty test set")
+    benchmark_sha256 = hashlib.sha256(test_file.read_bytes()).hexdigest()
+    adapter_sha256 = None
+    if adapter_path:
+        digest = hashlib.sha256()
+        for weight in sorted(Path(adapter_path).glob("adapter*")):
+            if weight.is_file():
+                digest.update(weight.name.encode())
+                with weight.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+        adapter_sha256 = digest.hexdigest()
 
     # Load model (local or API)
     model, tokenizer = None, None
     if not use_api:
+        from transformers import set_seed
+        set_seed(42 + run_index)
         model, tokenizer = load_hf_model(model_name, adapter_path, quantize_4bit)
 
     # Determine template name
@@ -398,7 +425,7 @@ def run_evaluation(
     # Model display name for results
     display_name = api_model_name if use_api else model_name.split("/")[-1]
     if adapter_path:
-        adapter_name = Path(adapter_path).name
+        adapter_name = Path(adapter_path).parent.name
         display_name = f"{display_name}+{adapter_name}"
 
     # Run evaluation
@@ -409,7 +436,30 @@ def run_evaluation(
     print(f"  Context mode: {'removed' if no_context else 'present'}")
     print()
 
+    # Save incrementally so interrupted Colab runs can resume
+    context_suffix = "_no_context" if no_context else ""
+    adapter_suffix = f"_{Path(adapter_path).name}" if adapter_path else ""
+    filename = f"{display_name}__{setting}__{template_name}{adapter_suffix}{context_suffix}__run{run_index}.jsonl"
+    # Sanitize filename
+    filename = re.sub(r"[^\w\-.]", "_", filename)
+    output_path = output_dir / filename
+
+    completed = {}
+    if output_path.exists():
+        for line in output_path.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            if row.get("benchmark_sha256") != benchmark_sha256:
+                raise ValueError("Existing results use a different benchmark; choose a new output directory")
+            method = "api-generation" if use_api else "label-logprob" if logit_score else "greedy-generation"
+            if row.get("adapter_sha256") != adapter_sha256 or row.get("inference_method") != method:
+                raise ValueError("Existing results use different weights or inference method; choose a new output directory")
+            completed[row["item_id"]] = row
+    results = list(completed.values())
+    correct = sum(bool(row["correct"]) for row in results)
+
     for item in tqdm(test_items, desc="Evaluating"):
+        if item["id"] in completed:
+            continue
         category = item["pragmatic_category"]
         valid_labels = get_valid_labels(category)
 
@@ -438,6 +488,11 @@ def run_evaluation(
         # Store result per Section H schema
         result = {
             "model": display_name,
+            "model_id": api_model_name if use_api else model_name,
+            "adapter_condition": Path(adapter_path).parent.name if adapter_path else None,
+            "adapter_sha256": adapter_sha256,
+            "benchmark_sha256": benchmark_sha256,
+            "inference_method": "api-generation" if use_api else "label-logprob" if logit_score else "greedy-generation",
             "setting": setting,
             "prompt_template": template_name,
             "item_id": item["id"],
@@ -450,14 +505,8 @@ def run_evaluation(
             "context_mode": "removed" if no_context else "present",
         }
         results.append(result)
-
-    # Save results
-    context_suffix = "_no_context" if no_context else ""
-    adapter_suffix = f"_{Path(adapter_path).name}" if adapter_path else ""
-    filename = f"{display_name}__{setting}__{template_name}{adapter_suffix}{context_suffix}__run{run_index}.jsonl"
-    # Sanitize filename
-    filename = re.sub(r"[^\w\-.]", "_", filename)
-    output_path = output_dir / filename
+        with output_path.open("a", encoding="utf-8") as checkpoint:
+            checkpoint.write(json.dumps(result, ensure_ascii=False) + "\n")
 
     with open(output_path, "w", encoding="utf-8") as f:
         for r in results:
@@ -494,7 +543,7 @@ def main() -> None:
                         choices=["v1", "v2"],
                         help="Prompt template version")
     parser.add_argument("--test-file", type=str,
-                        default=str(PROJECT_ROOT / "data" / "benchmark" / "test.jsonl"),
+                        default=str(PROJECT_ROOT / "data" / "benchmark" / "v2" / "test.jsonl"),
                         help="Path to test JSONL file")
     parser.add_argument("--output-dir", type=str,
                         default=str(PROJECT_ROOT / "results" / "baseline"),

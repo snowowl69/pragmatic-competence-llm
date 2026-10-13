@@ -1,0 +1,8 @@
+{
+  "llm_results_available": false,
+  "experiments": {},
+  "limitations": [
+    "Human annotation and pretraining contamination review remain required",
+    "CPU reference results are not LLM results"
+  ]
+}

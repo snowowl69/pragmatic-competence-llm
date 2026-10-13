@@ -144,7 +144,7 @@ def normalize_isarcasm() -> list[dict[str, Any]]:
     """
     items: list[dict[str, Any]] = []
     hf_path = RAW_DATA_DIR / "isarcasm" / "isarcasm_hf.jsonl"
-    csv_files = list((RAW_DATA_DIR / "isarcasm").glob("*.csv"))
+    csv_files = sorted((RAW_DATA_DIR / "isarcasm").glob("*.csv"))
 
     idx_offset = 1000  # Offset to avoid ID collisions with MUStARD
 
@@ -190,14 +190,18 @@ def normalize_isarcasm() -> list[dict[str, Any]]:
                     continue
 
                 # Try to find the text and label columns
-                text_col = 0
-                label_col = 1
+                text_col = None
+                label_col = None
                 for i, h in enumerate(header):
                     h_lower = h.lower().strip()
-                    if "tweet" in h_lower or "text" in h_lower:
+                    if h_lower in ("tweet", "text", "tweet_text"):
                         text_col = i
-                    elif "label" in h_lower or "sarcas" in h_lower:
+                    elif h_lower in ("label", "sarcasm_label", "sarcastic", "sarcasm"):
                         label_col = i
+
+                if text_col is None or label_col is None:
+                    print(f"[iSarcasm] Skipping {csv_path.name}: tweet text and label columns required (IDs are not text).")
+                    continue
 
                 for idx, row in enumerate(reader):
                     if len(row) <= max(text_col, label_col):
@@ -208,9 +212,10 @@ def normalize_isarcasm() -> list[dict[str, Any]]:
                         continue
 
                     try:
-                        is_sarcastic = bool(int(row[label_col].strip()))
-                    except (ValueError, IndexError):
-                        is_sarcastic = False
+                        raw_label = row[label_col].strip().lower()
+                        is_sarcastic = {"1": True, "0": False, "sarcastic": True, "not_sarcastic": False}[raw_label]
+                    except (KeyError, IndexError):
+                        raise ValueError(f"Unknown iSarcasm label in {csv_path.name}: {row[label_col]!r}")
 
                     item = {
                         "id": f"sarc_{idx_offset + len(items):04d}",
@@ -262,6 +267,7 @@ def normalize_circa() -> list[dict[str, Any]]:
     CIRCA_LABEL_MAP = {
         "Yes, subject did.": "yes",
         "Probably yes / sometimes yes": "yes",
+        "Yes, subject to some conditions": "uncertain",
         "Yes, subject did. [yes]": "yes",
         "No, subject did not.": "no",
         "Probably no": "no",
@@ -315,7 +321,8 @@ def normalize_circa() -> list[dict[str, Any]]:
     elif tsv_path.exists():
         print(f"[Circa] Loading from {tsv_path}")
         with open(tsv_path, "r", encoding="utf-8", errors="replace") as f:
-            reader = csv.reader(f, delimiter="\t")
+            # Circa is literal TSV: quotes in dialogue are ordinary text.
+            reader = csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
             header = next(reader, None)
 
             if header is None:
@@ -326,8 +333,8 @@ def normalize_circa() -> list[dict[str, Any]]:
             col_map = {h.strip().lower(): i for i, h in enumerate(header)}
 
             for idx, row in enumerate(reader):
-                if len(row) < 5:
-                    continue
+                if len(row) != len(header):
+                    raise ValueError(f"Malformed Circa row {idx + 2}: {len(row)} columns")
 
                 # Try to extract columns by name, falling back to position
                 context = row[col_map.get("context", 1)].strip() if "context" in col_map else row[1].strip()
@@ -421,6 +428,10 @@ def write_processed(items: list[dict[str, Any]], source_name: str) -> Path:
     """Write normalized items to a JSONL file in data/processed/."""
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     output_path = PROCESSED_DIR / f"{source_name}.jsonl"
+    for item in items:
+        errors = validate_item(item)
+        if errors:
+            raise ValueError(f"Invalid {source_name} item {item.get('id')}: {errors}")
 
     # Validate all items before writing
     valid_count = 0

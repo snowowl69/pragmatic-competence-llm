@@ -41,8 +41,10 @@ def compute_metrics(
     Returns:
         Dictionary with accuracy, macro_f1, per_label metrics, and confusion matrix
     """
+    if not gold_labels or len(gold_labels) != len(predicted_labels):
+        raise ValueError("Metrics require nonempty, equally sized gold and prediction arrays")
     accuracy = accuracy_score(gold_labels, predicted_labels)
-    macro_f1 = f1_score(gold_labels, predicted_labels, average="macro", zero_division=0)
+    macro_f1 = f1_score(gold_labels, predicted_labels, labels=label_names, average="macro", zero_division=0)
 
     report = classification_report(
         gold_labels,
@@ -114,7 +116,8 @@ def mcnemars_test(
     Returns:
         Dictionary with contingency table, test statistic, and p-value.
     """
-    assert len(gold_labels) == len(predictions_a) == len(predictions_b)
+    if not gold_labels or not len(gold_labels) == len(predictions_a) == len(predictions_b):
+        raise ValueError("Paired tests require nonempty, equally sized arrays")
 
     # Build the 2×2 contingency table:
     #               Model B correct  | Model B wrong
@@ -153,8 +156,8 @@ def mcnemars_test(
         method = "exact_binomial"
     else:
         # Chi-squared approximation with continuity correction
-        statistic = (abs(n01 - n10) - 1) ** 2 / (n01 + n10)
-        p_value = 1 - scipy_stats.chi2.cdf(statistic, df=1)
+        statistic = max(0, abs(n01 - n10) - 1) ** 2 / (n01 + n10)
+        p_value = scipy_stats.chi2.sf(statistic, df=1)
         method = "chi_squared_corrected"
 
     return {
@@ -166,8 +169,8 @@ def mcnemars_test(
         "statistic": float(statistic),
         "p_value": float(p_value),
         "method": method,
-        "significant_at_005": p_value < 0.05,
-        "significant_at_001": p_value < 0.01,
+        "significant_at_005": bool(p_value < 0.05),
+        "significant_at_001": bool(p_value < 0.01),
         "model_a_accuracy": (n00 + n01) / (n00 + n01 + n10 + n11),
         "model_b_accuracy": (n00 + n10) / (n00 + n01 + n10 + n11),
     }
@@ -202,19 +205,23 @@ def aggregate_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             r.get("model", "unknown"),
             r.get("setting", "unknown"),
             r.get("prompt_template", "unknown"),
+            r.get("context_mode", "present"),
+            r.get("run_index", 0),
         )
         groups[key].append(r)
 
     summary: dict[str, Any] = {}
-    for (model, setting, template), group_results in sorted(groups.items()):
+    for (model, setting, template, context_mode, run_index), group_results in sorted(groups.items()):
         gold = [r["gold_label"] for r in group_results]
         pred = [r["predicted_label"] for r in group_results]
 
-        group_key = f"{model}__{setting}__{template}"
+        group_key = f"{model}__{setting}__{template}__{context_mode}__run{run_index}"
         summary[group_key] = {
             "model": model,
             "setting": setting,
             "prompt_template": template,
+            "context_mode": context_mode,
+            "run_index": run_index,
             "overall": compute_metrics(gold, pred),
             "per_category": compute_per_category_metrics(group_results),
         }

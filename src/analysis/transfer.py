@@ -67,6 +67,14 @@ def build_transfer_matrix(
         condition_dir = post_ft_dir / condition
         if condition_dir.exists():
             condition_results = _load_results_from_dir(condition_dir)
+            if baseline:
+                def protocol(row):
+                    return tuple(row.get(k) for k in ('model_id', 'setting', 'prompt_template', 'context_mode', 'run_index', 'benchmark_sha256', 'inference_method'))
+                if {protocol(r) for r in baseline_results} != {protocol(r) for r in condition_results}:
+                    raise ValueError('Baseline and adapter evaluation protocols differ')
+                gold = lambda rows: {r['item_id']: (r['pragmatic_category'], r['gold_label']) for r in rows}
+                if gold(baseline_results) != gold(condition_results):
+                    raise ValueError('Baseline and adapter test IDs or gold labels differ')
             matrix[condition] = _compute_per_category_accuracy(condition_results, categories)
 
     # Compute transfer gains over baseline
@@ -74,8 +82,8 @@ def build_transfer_matrix(
     for condition, cat_accs in matrix.items():
         transfer_gains[condition] = {}
         for cat, acc in cat_accs.items():
-            baseline_acc = baseline.get(cat, 0)
-            transfer_gains[condition][cat] = acc - baseline_acc
+            baseline_acc = baseline.get(cat)
+            transfer_gains[condition][cat] = acc - baseline_acc if acc is not None and baseline_acc is not None else None
 
     return {
         "matrix": matrix,
@@ -105,15 +113,22 @@ def _compute_per_category_accuracy(
     correct: dict[str, int] = defaultdict(int)
     total: dict[str, int] = defaultdict(int)
 
+    seen = set()
+    protocols = set()
     for r in results:
+        key = r.get('item_id')
+        if not key or key in seen: raise ValueError('Missing or repeated test item ID')
+        seen.add(key)
+        protocols.add(tuple(r.get(k) for k in ('model', 'setting', 'prompt_template', 'context_mode', 'run_index', 'benchmark_sha256', 'inference_method')))
+        if len(protocols)>1: raise ValueError('Mixed evaluation protocols must not be pooled')
         cat = r.get("pragmatic_category", "unknown")
         if cat in categories:
             total[cat] += 1
-            if r.get("correct", False):
+            if r.get("gold_label") is not None and r.get("predicted_label") == r["gold_label"]:
                 correct[cat] += 1
 
     return {
-        cat: correct[cat] / total[cat] if total[cat] > 0 else 0.0
+        cat: correct[cat] / total[cat] if total[cat] > 0 else None
         for cat in categories
     }
 
@@ -121,6 +136,10 @@ def _compute_per_category_accuracy(
 # ---------------------------------------------------------------------------
 # Output and display
 # ---------------------------------------------------------------------------
+
+
+def format_score(value):
+    return 'Not measured' if value is None else f'{value:.4f}'
 
 
 def print_transfer_matrix(data: dict[str, Any]) -> None:
@@ -143,8 +162,8 @@ def print_transfer_matrix(data: dict[str, Any]) -> None:
     if data["baseline"]:
         row = f"{'Baseline (0-shot)':<20}"
         for cat in categories:
-            acc = data["baseline"].get(cat, 0)
-            row += f" {acc:>11.3f}"
+            acc = data["baseline"].get(cat)
+            row += f" {format_score(acc):>11}"
         print(row)
         print("-" * 60)
 
@@ -153,8 +172,8 @@ def print_transfer_matrix(data: dict[str, Any]) -> None:
         cat_accs = data["matrix"].get(condition, {})
         row = f"{condition:<20}"
         for cat in categories:
-            acc = cat_accs.get(cat, 0)
-            row += f" {acc:>11.3f}"
+            acc = cat_accs.get(cat)
+            row += f" {format_score(acc):>11}"
         print(row)
 
     # Transfer gains
@@ -164,9 +183,8 @@ def print_transfer_matrix(data: dict[str, Any]) -> None:
         for condition, gains in data["transfer_gains"].items():
             row = f"  {condition:<18}"
             for cat in categories:
-                gain = gains.get(cat, 0)
-                sign = "+" if gain >= 0 else ""
-                row += f" {sign}{gain:>10.3f}"
+                gain = gains.get(cat)
+                row += f" {format_score(gain):>11}"
             print(row)
 
     print(f"{'=' * 70}\n")
@@ -192,12 +210,12 @@ def save_transfer_matrix_csv(
 
         # Baseline
         if data["baseline"]:
-            writer.writerow(["baseline"] + [f"{data['baseline'].get(c, 0):.4f}" for c in categories])
+            writer.writerow(["baseline"] + [format_score(data['baseline'].get(c)) for c in categories])
 
         # Fine-tuned conditions
         for condition in data.get("conditions", []):
             accs = data["matrix"].get(condition, {})
-            writer.writerow([condition] + [f"{accs.get(c, 0):.4f}" for c in categories])
+            writer.writerow([condition] + [format_score(accs.get(c)) for c in categories])
 
     print(f"Transfer matrix saved to {output_path}")
 

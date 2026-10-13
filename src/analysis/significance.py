@@ -69,10 +69,17 @@ def run_significance_tests(
     finetuned_by_id = {r["item_id"]: r for r in finetuned_results}
 
     # Find common items
-    common_ids = set(baseline_by_id.keys()) & set(finetuned_by_id.keys())
+    common_ids = sorted(set(baseline_by_id.keys()) & set(finetuned_by_id.keys()))
     if not common_ids:
         print("⚠ No common items found between baseline and fine-tuned results.")
         return {}
+    if set(baseline_by_id) != set(finetuned_by_id):
+        raise ValueError("Paired comparisons require identical item IDs")
+    for item_id in common_ids:
+        a, b = baseline_by_id[item_id], finetuned_by_id[item_id]
+        for field in ("gold_label", "pragmatic_category", "setting", "prompt_template", "context_mode", "run_index", "benchmark_sha256", "inference_method"):
+            if a.get(field) != b.get(field):
+                raise ValueError(f"Incompatible paired records for {item_id}: {field}")
 
     # Run per-category tests
     results: dict[str, Any] = {}
@@ -107,6 +114,14 @@ def run_significance_tests(
         results[cat]["kappa_baseline"] = _compute_kappa(gold, pred_a)
         results[cat]["kappa_finetuned"] = _compute_kappa(gold, pred_b)
 
+    # Holm correction over the overall and available category tests in this pair.
+    tested = sorted(((key, value["p_value"]) for key, value in results.items() if "p_value" in value), key=lambda x: x[1])
+    previous = 0.0
+    for index, (key, p_value) in enumerate(tested):
+        adjusted = min(1.0, max(previous, p_value * (len(tested) - index)))
+        previous = adjusted
+        results[key]["p_value_holm"] = adjusted
+        results[key]["significant_holm_005"] = adjusted < .05
     return results
 
 
@@ -115,6 +130,12 @@ def _load_all_results(directory: Path) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for f in directory.glob("*.jsonl"):
         results.extend(load_results(f))
+    ids = [r["item_id"] for r in results]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Directory mixes repeated items/runs. Supply one matching experiment per directory.")
+    conditions = {(r.get("model"), r.get("setting"), r.get("prompt_template"), r.get("context_mode"), r.get("run_index")) for r in results}
+    if len(conditions) > 1:
+        raise ValueError("Directory mixes evaluation conditions. Compare one condition at a time.")
     return results
 
 

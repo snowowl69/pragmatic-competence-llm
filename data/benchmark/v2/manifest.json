@@ -1,0 +1,97 @@
+{
+  "version": 2,
+  "seed": 42,
+  "splits": {
+    "train": {
+      "size": 2625,
+      "categories": {
+        "implicature": 2000,
+        "indirect_speech_act": 108,
+        "sarcasm": 517
+      },
+      "labels": {
+        "implicature:uncertain": 413,
+        "implicature:no": 673,
+        "implicature:yes": 914,
+        "indirect_speech_act:request": 43,
+        "indirect_speech_act:suggestion": 32,
+        "indirect_speech_act:complaint": 12,
+        "indirect_speech_act:statement": 15,
+        "indirect_speech_act:question": 6,
+        "sarcasm:sarcastic": 270,
+        "sarcasm:sincere": 247
+      },
+      "sources": {
+        "Circa": 2000,
+        "hand-curated": 103,
+        "control-item": 5,
+        "MUStARD": 517
+      }
+    },
+    "val": {
+      "size": 3334,
+      "categories": {
+        "implicature": 3251,
+        "indirect_speech_act": 15,
+        "sarcasm": 68
+      },
+      "labels": {
+        "implicature:yes": 1475,
+        "implicature:no": 1140,
+        "implicature:uncertain": 636,
+        "indirect_speech_act:request": 5,
+        "indirect_speech_act:suggestion": 5,
+        "indirect_speech_act:complaint": 1,
+        "indirect_speech_act:question": 1,
+        "indirect_speech_act:statement": 3,
+        "sarcasm:sincere": 37,
+        "sarcasm:sarcastic": 31
+      },
+      "sources": {
+        "Circa": 3251,
+        "hand-curated": 12,
+        "control-item": 3,
+        "MUStARD": 68
+      }
+    },
+    "test": {
+      "size": 4852,
+      "categories": {
+        "implicature": 4726,
+        "indirect_speech_act": 22,
+        "sarcasm": 104
+      },
+      "labels": {
+        "implicature:yes": 2137,
+        "implicature:uncertain": 940,
+        "implicature:no": 1649,
+        "indirect_speech_act:request": 12,
+        "indirect_speech_act:suggestion": 3,
+        "indirect_speech_act:complaint": 4,
+        "indirect_speech_act:question": 1,
+        "indirect_speech_act:statement": 2,
+        "sarcasm:sincere": 60,
+        "sarcasm:sarcastic": 44
+      },
+      "sources": {
+        "Circa": 4726,
+        "hand-curated": 20,
+        "control-item": 2,
+        "MUStARD": 104
+      }
+    }
+  },
+  "sha256": {
+    "train.jsonl": "48d243663dcb8234d763f3e8abc5d5a3257bfc442b70c87abbe51ebd5a7d70ec",
+    "val.jsonl": "a2f3949328660e64f2f3bb51a5fee2435799f2bbecdd5bb0433b8931aae6e45c",
+    "test.jsonl": "9c0eefafbd80a0081ee0f03c9c1cacb70492538776a1c0b84a58a5d5518dc414"
+  },
+  "excluded": "Committed iSarcasm files contain IDs without tweet text; excluded.",
+  "policy": "Circa questions and MUStARD dialogue contexts are grouped. Exact reply collisions across splits are excluded. Not source-dataset-disjoint.",
+  "limitations": [
+    "No new independent human annotation",
+    "Public pretraining contamination cannot be ruled out",
+    "Conditional yes is mapped to uncertain",
+    "Near duplicates require manual review"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "torch": "2.13.0",
+  "transformers": "5.15.0",
+  "trl": "1.10.0",
+  "peft": "0.20.0",
+  "datasets": "5.0.1",
+  "bitsandbytes": "0.50.1",
+  "accelerate": "1.14.0",
+  "gradio": "6.24.0",
+  "scikit-learn": "1.7.2",
+  "scipy": "1.15.3",
+  "numpy": "2.2.6",
+  "pytest": "9.1.1"
+}

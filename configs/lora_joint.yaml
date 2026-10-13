@@ -4,11 +4,11 @@
 
 # Model
 base_model: "meta-llama/Llama-3.1-8B-Instruct"
-trust_remote_code: true
+trust_remote_code: false
 
 # Data
-train_file: "data/training/train_instructions_joint.jsonl"
-val_file: "data/training/val_instructions_joint.jsonl"
+train_file: "data/training/v2/train_instructions_joint.jsonl"
+val_file: "data/training/v2/val_instructions_joint.jsonl"
 max_seq_length: 512
 
 # LoRA hyperparameters

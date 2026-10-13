@@ -108,18 +108,21 @@ def find_near_duplicates(
     """
     # First, find exact duplicates (O(N)) cheaply
     exact = set(find_exact_duplicates(items, key_fields))
-    if exact:
-        # Return exact duplicates directly — no need for expensive Jaccard pass
-        return list(exact)
-
     # Jaccard pass for near-duplicates (O(N²)) — only when no exact hits
     texts = [
         " ".join(str(item.get(f, "")) for f in key_fields) for item in items
     ]
-    pairs: list[tuple[int, int]] = []
+    pairs: list[tuple[int, int]] = sorted(exact)
+    tokens = [_token_set(text) for text in texts]
     for i in range(len(texts)):
         for j in range(i + 1, len(texts)):
-            if jaccard(texts[i], texts[j]) >= threshold:
+            if (i, j) in exact:
+                continue
+            a, b = tokens[i], tokens[j]
+            if a and b and min(len(a), len(b)) / max(len(a), len(b)) < threshold:
+                continue
+            score = len(a & b) / len(a | b) if a or b else 1.0
+            if score >= threshold:
                 pairs.append((i, j))
     return pairs
 

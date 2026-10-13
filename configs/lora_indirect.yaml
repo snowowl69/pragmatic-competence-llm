@@ -2,10 +2,10 @@
 # SHOULD DO run — for the cross-category transfer matrix.
 
 base_model: "meta-llama/Llama-3.1-8B-Instruct"
-trust_remote_code: true
+trust_remote_code: false
 
-train_file: "data/training/train_instructions_indirect.jsonl"
-val_file: "data/training/val_instructions_indirect.jsonl"
+train_file: "data/training/v2/train_instructions_indirect.jsonl"
+val_file: "data/training/v2/val_instructions_indirect.jsonl"
 max_seq_length: 512
 
 lora_rank: 16

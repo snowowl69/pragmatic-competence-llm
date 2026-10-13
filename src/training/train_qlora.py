@@ -52,8 +52,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "trust_remote_code": True,
 
     # Data
-    "train_file": "data/training/train_instructions.jsonl",
-    "val_file": "data/training/val_instructions.jsonl",
+    "train_file": "data/training/v2/train_instructions_joint.jsonl",
+    "val_file": "data/training/v2/val_instructions_joint.jsonl",
     "max_seq_length": 512,
 
     # LoRA
@@ -104,7 +104,9 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
     """Load training config from YAML, merged with defaults."""
     config = DEFAULT_CONFIG.copy()
 
-    if config_path and Path(config_path).exists():
+    if config_path and not Path(config_path).is_file():
+        raise FileNotFoundError(config_path)
+    if config_path:
         with open(config_path, "r") as f:
             user_config = yaml.safe_load(f) or {}
         config.update(user_config)
@@ -135,6 +137,16 @@ def _auto_dtype():
 
 
 def train(config: dict[str, Any]) -> None:
+    from src.training.live_monitor import LiveMonitor
+    monitor = LiveMonitor(config['output_dir'], config)
+    try:
+        _train(config, monitor)
+    except BaseException as error:
+        monitor.publish('failed', error_type=type(error).__name__)
+        raise
+
+
+def _train(config: dict[str, Any], monitor) -> None:
     """Run QLoRA fine-tuning with the given config."""
     import torch
     from datasets import load_dataset
@@ -145,7 +157,10 @@ def train(config: dict[str, Any]) -> None:
         BitsAndBytesConfig,
         TrainingArguments,
     )
-    from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
+    from trl import SFTConfig, SFTTrainer
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("QLoRA requires a CUDA GPU. Run notebooks/colab_pipeline.ipynb on a GPU runtime.")
 
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -222,57 +237,39 @@ def train(config: dict[str, Any]) -> None:
         val_items = load_jsonl_dataset(config["val_file"])
         print(f"  Validation items: {len(val_items)}")
 
-    # Format using native chat template for Llama-3.1 (and compatible models).
-    # DataCollatorForCompletionOnlyLM will mask the instruction tokens so that
-    # the loss is computed ONLY over the assistant response tokens.
-    #
-    # The assistant turn boundary token for Llama-3.1-Instruct is:
-    #   <|start_header_id|>assistant<|end_header_id|>
-    RESPONSE_TEMPLATE = "<|start_header_id|>assistant<|end_header_id|>"
-
     def format_item(item):
-        """Format a single training item using the model's native chat template.
-
-        Always converts to a messages list so that apply_chat_template handles
-        control tokens correctly for instruction-tuned models like Llama-3.1.
-        """
         if "messages" in item:
             messages = item["messages"]
         else:
-            instruction = item.get("instruction", "")
-            output = item.get("output", "")
             messages = [
-                {"role": "user", "content": instruction},
-                {"role": "assistant", "content": output},
+                {"role": "user", "content": item.get("instruction", "") + ("\n" + item["input"] if item.get("input") else "")},
+                {"role": "assistant", "content": item["output"]},
             ]
-        # add_generation_prompt=False: we want the full turn, not an open prompt
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
+        if not messages or messages[-1]["role"] != "assistant":
+            raise ValueError("Training record must end with an assistant completion")
+        return {"prompt": messages[:-1], "completion": messages[-1:]}
 
-    train_texts = [{"text": format_item(item)} for item in train_items]
-    val_texts = [{"text": format_item(item)} for item in val_items] if val_items else None
-
-    # Convert to HF Dataset
     from datasets import Dataset
-    train_dataset = Dataset.from_list(train_texts)
-    val_dataset = Dataset.from_list(val_texts) if val_texts else None
+    train_dataset = Dataset.from_list([format_item(x) for x in train_items])
+    val_dataset = Dataset.from_list([format_item(x) for x in val_items]) if val_items else None
 
     # --- Training arguments ---
     use_bf16 = (compute_dtype == torch.bfloat16)
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
+        max_length=config.get("max_seq_length", 512),
+        completion_only_loss=True,
+        gradient_checkpointing=True,
         output_dir=str(output_dir),
         num_train_epochs=config.get("num_train_epochs", 3),
         per_device_train_batch_size=config.get("per_device_train_batch_size", 2),
+        per_device_eval_batch_size=config.get("per_device_eval_batch_size", 2),
         gradient_accumulation_steps=config.get("gradient_accumulation_steps", 4),
         learning_rate=config.get("learning_rate", 1.5e-4),
         weight_decay=config.get("weight_decay", 0.01),
         warmup_ratio=config.get("warmup_ratio", 0.03),
         lr_scheduler_type=config.get("lr_scheduler_type", "cosine"),
-        fp16=config.get("fp16", not use_bf16),
-        bf16=config.get("bf16", use_bf16),
+        fp16=not use_bf16,
+        bf16=use_bf16,
         logging_steps=config.get("logging_steps", 10),
         save_steps=config.get("save_steps", 50),
         eval_strategy=config.get("eval_strategy", "steps") if val_dataset else "no",
@@ -284,23 +281,14 @@ def train(config: dict[str, Any]) -> None:
         metric_for_best_model="eval_loss" if val_dataset else None,
     )
 
-    # DataCollator that masks all tokens BEFORE the assistant header from loss.
-    # This is the critical fix: without this, the model trains on the instruction
-    # text too, which wastes capacity and can cause instruction-following drift.
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=RESPONSE_TEMPLATE,
-        tokenizer=tokenizer,
-    )
-
     # --- Trainer ---
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=training_args,
-        data_collator=collator,
-        max_seq_length=config.get("max_seq_length", 512),
+        callbacks=[monitor],
     )
 
     # --- Train ---
@@ -326,6 +314,7 @@ def train(config: dict[str, Any]) -> None:
     print(f"\n{'=' * 60}")
     print(f"Training complete: {config.get('experiment_name', 'unnamed')}")
     print(f"{'=' * 60}")
+    monitor.publish('completed', adapter=str(adapter_dir), compute_dtype=str(compute_dtype))
 
 
 # ---------------------------------------------------------------------------
